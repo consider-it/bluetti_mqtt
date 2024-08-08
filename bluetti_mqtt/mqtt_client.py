@@ -28,7 +28,7 @@ class MqttFieldConfig:
     id_override: Optional[str] = None  # Used to override Home Assistant field id
 
 
-COMMAND_TOPIC_RE = re.compile(r'^bluetti/command/(\w+)-(\d+)/([a-z_]+)$')
+COMMAND_TOPIC_RE = re.compile(r'bluetti/command/(\w+)-(\d+)/([a-z_]+)$')
 NORMAL_DEVICE_FIELDS = {
     'dc_input_power': MqttFieldConfig(
         type=MqttFieldType.NUMERIC,
@@ -494,6 +494,7 @@ class MQTTClient:
         bus: EventBus,
         hostname: str,
         home_assistant_mode: str,
+        topic: str,
         port: int = 1883,
         username: Optional[str] = None,
         password: Optional[str] = None,
@@ -504,6 +505,7 @@ class MQTTClient:
         self.username = username
         self.password = password
         self.home_assistant_mode = home_assistant_mode
+        self.topic = "custom-data" if topic == None else topic
         self.devices = []
 
     async def run(self):
@@ -535,8 +537,8 @@ class MQTTClient:
         await self.message_queue.put(msg)
 
     async def _handle_commands(self, client: Client):
-        async with client.filtered_messages('bluetti/command/#') as messages:
-            await client.subscribe('bluetti/command/#')
+        async with client.filtered_messages(f'{self.topic}/bluetti/command/#') as messages:
+            await client.subscribe(f'{self.topic}/bluetti/command/#')
             async for mqtt_message in messages:
                 await self._handle_command(mqtt_message)
 
@@ -558,8 +560,10 @@ class MQTTClient:
 
         def payload(id: str, device: BluettiDevice, field: MqttFieldConfig) -> str:
             ha_id = id if not field.id_override else field.id_override
+
+
             payload_dict = {
-                'state_topic': f'bluetti/state/{device.type}-{device.sn}/{id}',
+                'state_topic': f'{self.topic}/bluetti/state/{device.type}-{device.sn}/{id}',
                 'device': {
                     'identifiers': [
                         f'{device.sn}'
@@ -572,7 +576,7 @@ class MQTTClient:
                 'object_id': f'{device.type}_{ha_id}',
             }
             if field.setter:
-                payload_dict['command_topic'] = f'bluetti/command/{device.type}-{device.sn}/{id}'
+                payload_dict['command_topic'] = f'{self.topic}/bluetti/command/{device.type}-{device.sn}/{id}'
             payload_dict.update(field.home_assistant_extra)
 
             return json.dumps(payload_dict, separators=(',', ':'))
@@ -632,7 +636,7 @@ class MQTTClient:
 
     async def _handle_command(self, mqtt_message: MQTTMessage):
         # Parse the mqtt_message.topic
-        m = COMMAND_TOPIC_RE.match(mqtt_message.topic)
+        m = COMMAND_TOPIC_RE.search(mqtt_message.topic)
         if not m:
             logging.warn(f'unknown command topic: {mqtt_message.topic}')
             return
@@ -670,7 +674,7 @@ class MQTTClient:
 
     async def _handle_message(self, client: Client, msg: ParserMessage):
         logging.debug(f'Got a message from {msg.device}: {msg.parsed}')
-        topic_prefix = f'bluetti/state/{msg.device.type}-{msg.device.sn}/'
+        topic_prefix = f'{self.topic}/bluetti/state/{msg.device.type}-{msg.device.sn}/'
 
         # Publish normal fields
         for name, value in msg.parsed.items():
